@@ -19,7 +19,7 @@ def replay(args: argparse.Namespace):
     env, state_dim, num_actions = load_env(env_id, render_mode="human")
 
     config = load_config(env_id, model_id)
-    num_quantiles = config.get("num_quantiles", None)
+    num_quantiles = config["num_quantiles"] if "num_quantiles" in config else None
     hidden_dim = config["hidden_dim"]
 
     match model_id:
@@ -30,14 +30,15 @@ def replay(args: argparse.Namespace):
                 num_actions=num_actions,
             ).to(device)
         case "mcqrdqn":
+            assert isinstance(num_quantiles, int)
             model = MCQRDQNet(
                 input_dim=state_dim,
                 hidden_dim=hidden_dim,
                 num_actions=num_actions,
                 num_quantiles=num_quantiles,
             ).to(device)
-
         case "qrdqn":
+            assert isinstance(num_quantiles, int)
             model = QRDQNet(
                 input_dim=state_dim,
                 hidden_dim=hidden_dim,

@@ -22,9 +22,9 @@
     "hidden_dim": 128,
     "lr": 0.0005,
     "batch_size": 64,
-    "epsilon_decay": 20000,
-    "buffer_capacity": 10000,
-    "target_reward": -80.0
+    "epsilon_decay": 40000,
+    "buffer_capacity": 50000,
+    "target_reward": -100.0
   },
   "LunarLander-v3": {
     "num_episodes": 10000,

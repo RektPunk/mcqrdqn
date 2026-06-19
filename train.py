@@ -23,7 +23,7 @@ def train(args: argparse.Namespace):
     config = load_config(env_id, model_id)
 
     num_episodes = config["num_episodes"]
-    num_quantiles = config.get("num_quantiles", 50)
+    num_quantiles = config["num_quantiles"] if "num_quantiles" in config else None
     hidden_dim = config["hidden_dim"]
     lr = config["lr"]
     batch_size = config["batch_size"]
@@ -45,6 +45,7 @@ def train(args: argparse.Namespace):
                 lr=lr,
             )
         case "qrdqn":
+            assert isinstance(num_quantiles, int)
             agent = QRDQNAgent(
                 state_dim=state_dim,
                 num_actions=num_actions,
@@ -53,6 +54,7 @@ def train(args: argparse.Namespace):
                 lr=lr,
             )
         case "mcqrdqn":
+            assert isinstance(num_quantiles, int)
             agent = MCQRDQNAgent(
                 state_dim=state_dim,
                 num_actions=num_actions,
@@ -84,7 +86,6 @@ def train(args: argparse.Namespace):
 
     frame_idx = 0
     consecutive_success = 0
-
     for episode in range(num_episodes):
         state, _ = env.reset()
         episode_reward: float = 0.0
