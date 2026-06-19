@@ -1,0 +1,42 @@
+{
+  "Acrobot-v1": {
+    "num_episodes": 1000,
+    "num_quantiles": 50,
+    "hidden_dim": 64,
+    "lr": 0.0005,
+    "batch_size": 64,
+    "epsilon_decay": 20000,
+    "buffer_capacity": 10000,
+    "target_reward": -55.0
+  },
+  "CartPole-v1": {
+    "num_episodes": 500,
+    "num_quantiles": 50,
+    "hidden_dim": 64,
+    "lr": 0.0005,
+    "batch_size": 64,
+    "epsilon_decay": 5000,
+    "buffer_capacity": 10000,
+    "target_reward": 500.0
+  },
+  "MountainCar-v0": {
+    "num_episodes": 3000,
+    "num_quantiles": 50,
+    "hidden_dim": 128,
+    "lr": 0.0005,
+    "batch_size": 64,
+    "epsilon_decay": 20000,
+    "buffer_capacity": 10000,
+    "target_reward": -80.0
+  },
+  "LunarLander-v3": {
+    "num_episodes": 10000,
+    "num_quantiles": 50,
+    "hidden_dim": 256,
+    "lr": 0.0001,
+    "batch_size": 128,
+    "epsilon_decay": 50000,
+    "buffer_capacity": 500000,
+    "target_reward": 250.0
+  }
+}
