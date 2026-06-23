@@ -9,46 +9,81 @@ from common.loss import quantile_huber_loss
 
 
 class L1PMLinear(nn.Module):
-    def __init__(self, input_dim: int, num_quantiles: int):
+    def __init__(
+        self,
+        input_dim: int,
+        num_actions: int,
+        num_quantiles: int,
+    ):
         super().__init__()
         self.input_dim = input_dim
+        self.num_actions = num_actions
         self.num_quantiles = num_quantiles
-        self.delta_coef = nn.Parameter(torch.randn(input_dim, num_quantiles) * 0.05)
-        self.delta_bias = nn.Parameter(torch.randn(1, num_quantiles) * 0.05)
-        self.log_scale = nn.Parameter(torch.zeros(1))
-        # Placeholder to dynamically store the L1 penalty during the forward pass
+
+        # Parameter for quantile regression
+        self.delta_bias = nn.Parameter(
+            torch.randn(num_actions, 1, num_quantiles) * 0.05
+        )
+        self.delta_coef = nn.Parameter(
+            torch.randn(num_actions, input_dim, num_quantiles) * 0.05
+        )
+        self.log_scale = nn.Parameter(torch.zeros(num_actions, 1))
+
+        # Placeholder to store the L1 penalty during the forward pass
         self.register_buffer("_penalty", torch.tensor(0.0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Concatenate intercepts and weights: (h + 1, r)
-        delta = torch.cat([self.delta_bias, self.delta_coef], dim=0)
-        coef = torch.cumsum(delta, dim=1)
+        # Input shapes: (batch_size, input_dim)
+        # return shape: (batch_size, num_actions, num_quantiles)
 
-        # Slice out the weight and intercept variations for constraint validation
-        delta_coef = delta[1:, 1:]  # (h, r - 1)
-        delta_bias = delta[0:1, 1:]  # (1, r - 1)
+        # Concatenate intercepts and weights along the input/hidden dimension
+        delta = torch.cat(
+            [self.delta_bias, self.delta_coef], dim=1
+        )  # (num_actions, input_dim + 1, num_quantiles)
 
-        # Sum the negative weight across all hidden neurons (h) for each quantile
-        delta_minus_sum = torch.sum(torch.clamp(-delta_coef, min=0.0), dim=0)
+        # Accumulate the quantile changes to obtain the actual weights and intercepts
+        coef = torch.cumsum(delta, dim=2)  # (num_actions, input_dim + 1, num_quantiles)
 
-        # Clip intercept to be greater than or equal to the sum of negative weights
-        # Since the hidden layer outputs feature representation x in [0, 6],
-        # the bound guarantees that predicted quantiles never cross (Monotone).
-        delta_bias_clipped = torch.clamp(delta_bias, min=6.0 * delta_minus_sum)
+        # Slice out the weight and intercept for constraint validation
+        delta_coef = delta[:, 1:, 1:]  # (num_actions, input_dim, num_quantiles - 1)
+        delta_bias = delta[:, 0:1, 1:]  # (num_actions, 1, num_quantiles - 1)
 
-        scale = torch.exp(self.log_scale)
+        # Sum the negative weight across all input features for each quantile
+        delta_minus_sum = torch.sum(
+            torch.clamp(-delta_coef, min=0.0), dim=1
+        )  # (num_actions, num_quantiles - 1)
+
+        # Clip intercept
+        delta_bias_clipped = torch.clamp(
+            delta_bias, min=6.0 * delta_minus_sum.unsqueeze(1)
+        )  # (num_actions, 1, num_quantiles - 1)
+
+        # Exponential mapping of scale: scale shape
+        scale = torch.exp(self.log_scale).unsqueeze(0)  # (1, num_actions, 1)
+
         if self.training:
-            # Store the L1 penalty internally to pass it up to the optimizer
-            self._penalty = torch.mean(torch.abs(delta_bias - delta_bias_clipped))
+            # Store the total L1 penalty across all actions internally
+            self._penalty = torch.mean(
+                torch.abs(delta_bias - delta_bias_clipped), dim=2
+            ).sum()
 
-            # Return unconstrained prediction for smoother training landscape
-            return (torch.matmul(x, coef[1:, :]) + coef[0, :]) * scale
+            # Vectorized batched matrix multiplication over all actions
+            # Inputs:
+            # - x: (batch_size, input_dim) -> labeled 'bi'
+            # - coef[:, 1:, :]: (num_actions, input_dim, num_quantiles) -> labeled 'aiq'
+            # Output:
+            # - term1: (batch_size, num_actions, num_quantiles) -> labeled 'baq'
+            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
+            return (term1 + coef[:, 0, :].unsqueeze(0)) * scale
         else:
-            term1 = torch.matmul(x, coef[1:, :])
+            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
+
+            # Cumsum of the clipped variations to reconstruct the constrained intercepts
             term2 = torch.cumsum(
-                torch.cat([coef[0:1, 0:1], delta_bias_clipped], dim=1),
-                dim=1,
-            )
+                torch.cat([coef[:, 0:1, 0:1], delta_bias_clipped], dim=2),
+                dim=2,
+            )  # (num_actions, 1, num_quantiles)
+            term2 = term2.transpose(0, 1)  # (1, num_actions, num_quantiles)
             return (term1 + term2) * scale
 
     @property
@@ -74,21 +109,14 @@ class MCQRDQNet(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU6(),
         )
-
-        self.output_heads = nn.ModuleList(
-            [L1PMLinear(hidden_dim, num_quantiles) for _ in range(num_actions)]
-        )
+        self.output_head = L1PMLinear(hidden_dim, num_actions, num_quantiles)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Output shape: (batch_size, num_actions, num_quantiles)
         features = self.feature_extractor(x)
-        quantiles = torch.stack([head(features) for head in self.output_heads], dim=1)
-        return quantiles
+        return self.output_head(features)
 
     def get_penalty(self) -> torch.Tensor:
-        return torch.stack(
-            [head.penalty for head in self.output_heads if isinstance(head, L1PMLinear)]
-        ).sum()
+        return self.output_head.penalty
 
     def action(self, state: torch.Tensor) -> int:
         with torch.no_grad():
