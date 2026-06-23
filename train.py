@@ -123,7 +123,7 @@ def train(args: argparse.Namespace):
 
         if episode % 10 == 0:
             logger.info(
-                f"Episode {episode} | Reward: {episode_reward:.2f} | Epsilon: {epsilon:.2f}"
+                f"# {episode} | reward: {episode_reward:.2f} | epsilon: {epsilon:.2f}"
             )
 
         if target_reward and episode_reward >= target_reward:
