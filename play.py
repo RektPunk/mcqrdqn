@@ -48,11 +48,9 @@ def replay(args: argparse.Namespace):
         case _:
             raise ValueError(f"Unknown model_id: {model_id}")
 
-    model_path = (
-        Path("outputs")
-        / "weights"
-        / f"{model_id}_{env_id.replace('/', '_')}_{seed}.pth"
-    )
+    model_dir = Path("outputs") / "weights" / f"{env_id.replace('/', '_')}"
+    model_path = model_dir / f"{model_id}_{seed}.pth"
+
     try:
         model.load_state_dict(torch.load(model_path, map_location=device))
         print(f"Successfully loaded model weights from {model_path} on {device}")

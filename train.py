@@ -134,9 +134,9 @@ def train(args: argparse.Namespace):
         else:
             consecutive_success = 0
 
-    model_dir = Path("outputs") / "weights"
+    model_dir = Path("outputs") / "weights" / f"{env_id.replace('/', '_')}"
     model_dir.mkdir(parents=True, exist_ok=True)
-    model_path = model_dir / f"{model_id}_{env_id.replace('/', '_')}_{seed}.pth"
+    model_path = model_dir / f"{model_id}_{seed}.pth"
 
     torch.save(agent.policy_net.state_dict(), model_path)
     logger.info(f"Training finished. Model saved to {model_path}")
