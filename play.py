@@ -19,7 +19,7 @@ def replay(args: argparse.Namespace):
     env, state_dim, num_actions = load_env(env_id, render_mode="human")
 
     config = load_config(env_id, model_id)
-    num_quantiles = config["num_quantiles"] if "num_quantiles" in config else None
+    num_quantiles = config.get("num_quantiles", None)
     hidden_dim = config["hidden_dim"]
 
     match model_id:

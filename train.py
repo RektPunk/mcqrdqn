@@ -23,7 +23,7 @@ def train(args: argparse.Namespace):
     config = load_config(env_id, model_id)
 
     num_episodes = config["num_episodes"]
-    num_quantiles = config["num_quantiles"] if "num_quantiles" in config else None
+    num_quantiles = config.get("num_quantiles", None)
     hidden_dim = config["hidden_dim"]
     lr = config["lr"]
     batch_size = config["batch_size"]
