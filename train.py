@@ -1,4 +1,5 @@
 import argparse
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -28,14 +29,10 @@ def train(args: argparse.Namespace):
     lr = config["lr"]
     batch_size = config["batch_size"]
     epsilon_decay = config["epsilon_decay"]
-    target_reward = config["target_reward"]
 
     buffer_capacity = config["buffer_capacity"]
 
-    success_threshold = 10
-
     env, state_dim, num_actions = load_env(env_id, seed=seed)
-
     match model_id:
         case "dqn":
             agent = DQNAgent(
@@ -76,6 +73,10 @@ def train(args: argparse.Namespace):
     writer = SummaryWriter(log_dir=str(log_dir))
     print(f"TensorBoard logging initialized at: {log_dir}")
 
+    model_dir = Path("outputs") / "weights" / f"{env_id.replace('/', '_')}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_path = model_dir / f"{model_id}_{seed}.pth"
+
     epsilon_start = 1.0
     epsilon_final = 0.05
 
@@ -85,7 +86,8 @@ def train(args: argparse.Namespace):
         )
 
     frame_idx = 0
-    consecutive_success = 0
+    best_avg_reward = float("-inf")
+    reward_window = deque(maxlen=20)
     for episode in range(num_episodes):
         state, _ = env.reset()
         episode_reward: float = 0.0
@@ -126,20 +128,14 @@ def train(args: argparse.Namespace):
                 f"# {episode} | reward: {episode_reward:.2f} | epsilon: {epsilon:.2f}"
             )
 
-        if target_reward and episode_reward >= target_reward:
-            consecutive_success += 1
-            if consecutive_success >= success_threshold:
-                logger.info("Early stopping: Achieved target reward.")
-                break
-        else:
-            consecutive_success = 0
-
-    model_dir = Path("outputs") / "weights" / f"{env_id.replace('/', '_')}"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    model_path = model_dir / f"{model_id}_{seed}.pth"
-
-    torch.save(agent.policy_net.state_dict(), model_path)
-    logger.info(f"Training finished. Model saved to {model_path}")
+        reward_window.append(episode_reward)
+        current_avg_reward = np.mean(reward_window)
+        if len(reward_window) >= 10 and current_avg_reward > best_avg_reward:
+            best_avg_reward = current_avg_reward
+            torch.save(agent.policy_net.state_dict(), model_path)
+            logger.info(
+                f"New best 20-ep avg reward: {best_avg_reward:.2f}! Model saved."
+            )
 
     writer.close()
     env.close()
