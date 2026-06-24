@@ -137,7 +137,7 @@ class MCQRDQNAgent:
         lr: float,
         gamma: float = 0.99,
         tau: float = 0.005,
-        l1_penalty_weight: float = 10.0,
+        l1_penalty_weight: float = 1.0,
     ):
         self.num_actions = num_actions
         self.num_quantiles = num_quantiles
