@@ -1,90 +1,94 @@
 import argparse
-from pathlib import Path
 
+import numpy as np
 import torch
 
-from common.env import device, load_env
-from common.utils import load_config
-from models.dqn import DQNet
-from models.mcqrdqn import MCQRDQNet
-from models.qrdqn import QRDQNet
+from common.env import load_env
+from common.logger import logger
+from common.utils import get_model_path, load_config
+from models import FQFAgent, MCFQFAgent, set_agent
 
 
-def replay(args: argparse.Namespace):
+def play(args: argparse.Namespace):
     env_id = args.env_id
     model_id = args.model_id
     seed = args.seed
-    num_test_episodes = args.num_test_episodes
-
-    env, state_dim, num_actions = load_env(env_id, render_mode="human")
+    num_episodes = args.num_episodes
 
     config = load_config(env_id, model_id)
-    num_quantiles = config.get("num_quantiles", None)
-    hidden_dim = config["hidden_dim"]
+    env, state_dim, num_actions = load_env(env_id, seed=seed, render_mode="human")
 
-    match model_id:
-        case "dqn":
-            model = DQNet(
-                input_dim=state_dim,
-                hidden_dim=hidden_dim,
-                num_actions=num_actions,
-            ).to(device)
-        case "mcqrdqn":
-            assert isinstance(num_quantiles, int)
-            model = MCQRDQNet(
-                input_dim=state_dim,
-                hidden_dim=hidden_dim,
-                num_actions=num_actions,
-                num_quantiles=num_quantiles,
-            ).to(device)
-        case "qrdqn":
-            assert isinstance(num_quantiles, int)
-            model = QRDQNet(
-                input_dim=state_dim,
-                hidden_dim=hidden_dim,
-                num_actions=num_actions,
-                num_quantiles=num_quantiles,
-            ).to(device)
-        case _:
-            raise ValueError(f"Unknown model_id: {model_id}")
+    Agent = set_agent(model_id)
+    agent = Agent(
+        state_dim=state_dim,
+        num_actions=num_actions,
+        **config,
+    )
 
-    model_dir = Path("outputs") / "weights" / f"{env_id.replace('/', '_')}"
-    model_path = model_dir / f"{model_id}_{seed}.pth"
+    model_path = get_model_path(model_id, env_id, seed)
+    logger.info(f"Loading model from {model_path}...")
 
     try:
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        print(f"Successfully loaded model weights from {model_path} on {device}")
+        checkpoint = torch.load(model_path)
+
+        if isinstance(agent, (FQFAgent, MCFQFAgent)):
+            agent.policy_net.load_state_dict(checkpoint["policy_net"])
+            agent.fpnet.load_state_dict(checkpoint["fpnet"])
+            agent.policy_net.eval()
+            agent.fpnet.eval()
+        else:
+            agent.policy_net.load_state_dict(checkpoint)
+            agent.policy_net.eval()
+        logger.info("Model loaded successfully!")
     except FileNotFoundError:
-        print(f"Error: {model_path} not found. Please train the model first.")
+        logger.error(f"No model found at {model_path}. Please train the model first.")
+        return
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
         return
 
-    model.eval()
+    total_rewards = []
 
-    for episode in range(num_test_episodes):
+    for episode in range(num_episodes):
         state, _ = env.reset()
-        episode_reward = 0
+        episode_reward = 0.0
         done = False
 
         while not done:
-            state_t = torch.as_tensor(
-                state, dtype=torch.float32, device=device
-            ).unsqueeze(0)
-            action = model.action(state_t)
-            state, reward, terminated, truncated, _ = env.step(action)
-            episode_reward += float(reward)
+            with torch.no_grad():
+                action = agent.select_action(state, epsilon=0.0)
+
+            next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
-        print(f"Test Episode {episode + 1}, Reward: {episode_reward}")
+            state = next_state
+            episode_reward += float(reward)
+
+        total_rewards.append(episode_reward)
+        logger.info(f"# {episode + 1}/{num_episodes} | Reward: {episode_reward:.2f}")
+
+    logger.info(f"Finished {num_episodes} test episodes.")
+    logger.info(f"Stats: {np.mean(total_rewards):.2f} +/- {np.std(total_rewards):.2f}")
 
     env.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env-id", type=str)
-    parser.add_argument("--model-id", type=str, default="mcqrdqn")
+    parser.add_argument(
+        "--env-id",
+        type=str,
+        required=True,
+        help="e.g., CartPole-v1",
+    )
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default="mcqrdqn",
+        help="dqn, qrdqn, mcqrdqn, fqf, mcfqf",
+    )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-test-episodes", type=int, default=5)
+    parser.add_argument("--num-episodes", type=int, default=5)
 
     args = parser.parse_args()
-    replay(args)
+    play(args)

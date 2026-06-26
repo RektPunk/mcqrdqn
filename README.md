@@ -8,7 +8,7 @@ This project provides a robust implementation of **Monotone Conposite Quantile R
 *Trained agents (Seed 42, Episode 0) performing across various environments.*
 
 <div align="center">
-  
+
 | MountainCar-v0 (Episode 0) | LunarLander-v3 (Episode 0) |
 | :---: | :---: |
 | <img width="400" src="https://github.com/user-attachments/assets/4d839f41-f813-4844-a70e-062634bb8b65" /> |<img width="400" src="https://github.com/user-attachments/assets/f5a124d2-4239-4bd5-b139-1716c6fa42f7" /> |

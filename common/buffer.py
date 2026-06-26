@@ -34,12 +34,13 @@ class ReplayBuffer:
             *random.sample(self.buffer, batch_size),
             strict=True,
         )
+
         return (
-            torch.as_tensor(state, dtype=torch.float32, device=device),
-            torch.as_tensor(action, dtype=torch.long, device=device),
-            torch.as_tensor(reward, dtype=torch.float32, device=device),
-            torch.as_tensor(next_state, dtype=torch.float32, device=device),
-            torch.as_tensor(done, dtype=torch.int8, device=device),
+            torch.as_tensor(np.array(state), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(action), dtype=torch.long, device=device),
+            torch.as_tensor(np.array(reward), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(next_state), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(done), dtype=torch.uint8, device=device),
         )
 
     def __len__(self):

@@ -30,13 +30,6 @@ class DQNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.network(x)
 
-    def action(self, state: torch.Tensor) -> int:
-        with torch.no_grad():
-            q_values = self.forward(state)
-            action = q_values.argmax().item()
-
-        return int(action)
-
 
 class DQNAgent:
     def __init__(
@@ -44,7 +37,7 @@ class DQNAgent:
         state_dim: int,
         num_actions: int,
         hidden_dim: int,
-        lr: float,
+        lr: float = 1e-4,
         gamma: float = 0.99,
         tau: float = 0.005,
         **kwargs,
@@ -81,7 +74,11 @@ class DQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t)
+        with torch.no_grad():
+            q_values = self.policy_net.forward(state_t)
+            action = q_values.argmax().item()
+
+        return int(action)
 
     def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:

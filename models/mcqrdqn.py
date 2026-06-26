@@ -36,7 +36,7 @@ class L1PMLinear(nn.Module):
         # Placeholder to store the L1 penalty during the forward pass
         self.register_buffer("_penalty", torch.tensor(0.0))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, tau: torch.Tensor | None) -> torch.Tensor:
         # Input shapes: (batch_size, input_dim)
         # return shape: (batch_size, num_actions, num_quantiles)
 
@@ -65,37 +65,52 @@ class L1PMLinear(nn.Module):
         # Exponential mapping of scale: scale shape
         scale = torch.exp(self.log_scale).unsqueeze(0)  # (1, num_actions, 1)
 
+        # Vectorized batched matrix multiplication over all actions
+        # Inputs:
+        # - x: (batch_size, input_dim) -> labeled 'bi'
+        # - coef[:, 1:, :]: (num_actions, input_dim, num_quantiles) -> labeled 'aiq'
+        # Output:
+        # - term1: (batch_size, num_actions, num_quantiles) -> labeled 'baq'
+        term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
         if self.training:
             # Store the total L1 penalty across all actions internally
             self._penalty = torch.mean(
                 torch.abs(delta_bias - delta_bias_clipped), dim=2
             ).sum()
-
-            # Vectorized batched matrix multiplication over all actions
-            # Inputs:
-            # - x: (batch_size, input_dim) -> labeled 'bi'
-            # - coef[:, 1:, :]: (num_actions, input_dim, num_quantiles) -> labeled 'aiq'
-            # Output:
-            # - term1: (batch_size, num_actions, num_quantiles) -> labeled 'baq'
-            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
-            return (term1 + coef[:, 0, :].unsqueeze(0)) * scale
+            grid = (term1 + coef[:, 0, :].unsqueeze(0)) * scale
         else:
-            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
-
             # Cumsum of the clipped variations to reconstruct the constrained intercepts
             term2 = torch.cumsum(
                 torch.cat([coef[:, 0:1, 0:1], delta_bias_clipped], dim=2),
                 dim=2,
             )  # (num_actions, 1, num_quantiles)
             term2 = term2.transpose(0, 1)  # (1, num_actions, num_quantiles)
-            return (term1 + term2) * scale
+            grid = (term1 + term2) * scale
+
+        if tau is None:
+            return grid
+
+        scaled_tau = tau * (self.num_quantiles - 1)
+        idx_low = torch.clamp(scaled_tau.long(), 0, self.num_quantiles - 2)
+        idx_high = idx_low + 1
+
+        weight_high = scaled_tau - idx_low.float()
+        weight_low = 1.0 - weight_high
+
+        idx_low_expanded = idx_low.unsqueeze(1).expand(-1, self.num_actions, -1)
+        idx_high_expanded = idx_high.unsqueeze(1).expand(-1, self.num_actions, -1)
+
+        q_low = grid.gather(2, idx_low_expanded)
+        q_high = grid.gather(2, idx_high_expanded)
+
+        return weight_low.unsqueeze(1) * q_low + weight_high.unsqueeze(1) * q_high
 
     @property
     def penalty(self) -> torch.Tensor:
         return self._penalty
 
 
-class MCQRDQNet(nn.Module):
+class MCQNet(nn.Module):
     def __init__(
         self,
         input_dim: int,
@@ -116,20 +131,12 @@ class MCQRDQNet(nn.Module):
         )
         self.output_head = L1PMLinear(hidden_dim, num_actions, num_quantiles)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, tau: torch.Tensor | None = None) -> torch.Tensor:
         features = self.feature_extractor(x)
-        return self.output_head(features)
+        return self.output_head(features, tau)
 
     def get_penalty(self) -> torch.Tensor:
         return self.output_head.penalty
-
-    def action(self, state: torch.Tensor) -> int:
-        with torch.no_grad():
-            quantiles = self.forward(state)
-            q_values = quantiles.mean(dim=2)
-            action = q_values.argmax().item()
-
-        return int(action)
 
 
 class MCQRDQNAgent:
@@ -150,14 +157,14 @@ class MCQRDQNAgent:
         self.gamma = gamma
         self.tau = tau
         self.l1_penalty_weight = l1_penalty_weight
-        self.policy_net = MCQRDQNet(
+        self.policy_net = MCQNet(
             input_dim=state_dim,
             hidden_dim=hidden_dim,
             num_actions=num_actions,
             num_quantiles=num_quantiles,
             **kwargs,
         ).to(device)
-        self.target_net = MCQRDQNet(
+        self.target_net = MCQNet(
             input_dim=state_dim,
             hidden_dim=hidden_dim,
             num_actions=num_actions,
@@ -183,7 +190,13 @@ class MCQRDQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t)
+
+        with torch.no_grad():
+            dist = self.policy_net(state_t)
+            q_values = dist.mean(dim=2)
+            action = q_values.argmax().item()
+
+        return int(action)
 
     def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:

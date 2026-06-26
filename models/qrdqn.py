@@ -35,13 +35,6 @@ class QRDQNet(nn.Module):
         out = self.network(x)
         return out.view(-1, self.num_actions, self.num_quantiles)
 
-    def action(self, state: torch.Tensor) -> int:
-        with torch.no_grad():
-            quantiles = self.forward(state)
-            q_values = quantiles.mean(dim=2)
-            action = q_values.argmax().item()
-        return int(action)
-
 
 class QRDQNAgent:
     def __init__(
@@ -50,7 +43,7 @@ class QRDQNAgent:
         num_actions: int,
         hidden_dim: int,
         num_quantiles: int,
-        lr: float,
+        lr: float = 1e-4,
         gamma: float = 0.99,
         tau: float = 0.005,
         **kwargs,
@@ -93,7 +86,13 @@ class QRDQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t)
+
+        with torch.no_grad():
+            dist = self.policy_net(state_t)
+            q_values = dist.mean(dim=2)
+            action = q_values.argmax().item()
+
+        return int(action)
 
     def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:

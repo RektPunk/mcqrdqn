@@ -58,16 +58,6 @@ class IQNet(nn.Module):
 
         return out.permute(0, 2, 1)
 
-    def action(self, state: torch.Tensor, num_quantiles: int) -> int:
-        with torch.no_grad():
-            batch_size = state.size(0)
-            tau = torch.rand(batch_size, num_quantiles, device=state.device)
-            dist = self.forward(state, tau)
-            q_values = dist.mean(dim=2)
-            action = q_values.argmax().item()
-
-        return int(action)
-
 
 class IQNAgent:
     def __init__(
@@ -88,17 +78,17 @@ class IQNAgent:
         self.tau = tau
 
         self.policy_net = IQNet(
-            state_dim,
-            hidden_dim,
-            num_actions,
-            num_cosines,
+            input_dim=state_dim,
+            num_actions=num_actions,
+            hidden_dim=hidden_dim,
+            num_cosines=num_cosines,
             **kwargs,
         ).to(device)
         self.target_net = IQNet(
-            state_dim,
-            hidden_dim,
-            num_actions,
-            num_cosines,
+            input_dim=state_dim,
+            num_actions=num_actions,
+            hidden_dim=hidden_dim,
+            num_cosines=num_cosines,
             **kwargs,
         ).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -116,7 +106,15 @@ class IQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t, self.num_quantiles)
+
+        with torch.no_grad():
+            batch_size = state_t.size(0)
+            tau = torch.rand(batch_size, self.num_quantiles, device=state_t.device)
+            dist = self.policy_net(state_t, tau)
+            q_values = dist.mean(dim=2)
+            action = q_values.argmax().item()
+
+        return int(action)
 
     def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:
