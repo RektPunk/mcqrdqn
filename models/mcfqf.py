@@ -106,7 +106,7 @@ class MCFQFAgent:
             self.policy_net(states, taus_hat.detach()).gather(1, actions).squeeze(1)
         )
         with torch.no_grad():
-            next_taus, next_taus_hat, next_tau_deltas = self.target_fpnet(next_states)
+            _, next_taus_hat, next_tau_deltas = self.fpnet(next_states)
             next_policy_dist = self.policy_net(next_states, next_taus_hat)
             next_policy_q = (next_policy_dist * next_tau_deltas.unsqueeze(1)).sum(dim=2)
             best_actions = (
@@ -134,12 +134,17 @@ class MCFQFAgent:
             actions_dist = actions[:, :, :-1]
             q_at_taus = boundary_dist.gather(1, actions_dist).squeeze(1)
             fpn_grads = 2 * q_at_taus - curr_dist[:, :-1] - curr_dist[:, 1:]
-        fpn_loss = -(fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
-        self.optimizer_val.step()
+
+        fpn_loss = (fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
+        entropy_coeff = 0.001
+        entropy = -(tau_deltas * torch.log(tau_deltas + 1e-8)).sum(dim=-1).mean()
+        fpn_loss -= entropy_coeff * entropy
 
         self.optimizer_fpnet.zero_grad()
         fpn_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.fpnet.parameters(), max_norm=10.0)
+
+        self.optimizer_val.step()
         self.optimizer_fpnet.step()
 
         with torch.no_grad():
