@@ -2,6 +2,9 @@ import random
 from collections import deque
 
 import numpy as np
+import torch
+
+from common.env import device
 
 
 class ReplayBuffer:
@@ -15,20 +18,29 @@ class ReplayBuffer:
         reward: float,
         next_state: np.ndarray,
         done: bool,
-    ) -> None:
+    ):
         self.buffer.append((state, action, reward, next_state, done))
 
-    def sample(self, batch_size: int):
+    def sample(
+        self, batch_size: int
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         state, action, reward, next_state, done = zip(
             *random.sample(self.buffer, batch_size),
             strict=True,
         )
+
         return (
-            np.array(state),
-            np.array(action),
-            np.array(reward, dtype=np.float32),
-            np.array(next_state),
-            np.array(done, dtype=np.uint8),
+            torch.as_tensor(np.array(state), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(action), dtype=torch.long, device=device),
+            torch.as_tensor(np.array(reward), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(next_state), dtype=torch.float32, device=device),
+            torch.as_tensor(np.array(done), dtype=torch.uint8, device=device),
         )
 
     def __len__(self):

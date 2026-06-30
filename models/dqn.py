@@ -1,14 +1,23 @@
 import random
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from numpy.typing import NDArray
 
+from common.buffer import ReplayBuffer
 from common.env import device
 
 
 class DQNet(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, num_actions: int):
+    def __init__(
+        self,
+        input_dim: int,
+        num_actions: int,
+        hidden_dim: int,
+        **kwargs,
+    ):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -21,37 +30,41 @@ class DQNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.network(x)
 
-    def action(self, state: torch.Tensor) -> int:
-        with torch.no_grad():
-            q_values = self.forward(state)
-            action = q_values.argmax().item()
-
-        return int(action)
-
 
 class DQNAgent:
     def __init__(
         self,
         state_dim: int,
-        hidden_dim: int,
         num_actions: int,
-        lr: float,
+        hidden_dim: int,
+        lr: float = 1e-4,
         gamma: float = 0.99,
         tau: float = 0.005,
+        **kwargs,
     ):
         self.num_actions = num_actions
         self.gamma = gamma
         self.tau = tau
 
-        self.policy_net = DQNet(state_dim, hidden_dim, num_actions).to(device)
-        self.target_net = DQNet(state_dim, hidden_dim, num_actions).to(device)
+        self.policy_net = DQNet(
+            input_dim=state_dim,
+            hidden_dim=hidden_dim,
+            num_actions=num_actions,
+            **kwargs,
+        ).to(device)
+        self.target_net = DQNet(
+            input_dim=state_dim,
+            hidden_dim=hidden_dim,
+            num_actions=num_actions,
+            **kwargs,
+        ).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss()
 
-    def select_action(self, state, epsilon: float) -> int:
+    def select_action(self, state: NDArray[np.float32], epsilon: float) -> int:
         if random.random() < epsilon:
             return random.randrange(self.num_actions)
 
@@ -61,44 +74,29 @@ class DQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t)
+        with torch.no_grad():
+            q_values = self.policy_net.forward(state_t)
+            action = q_values.argmax().item()
 
-    def update(self, buffer, batch_size: int) -> tuple[float, float | None] | None:
+        return int(action)
+
+    def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:
             return
 
         states, actions, rewards, next_states, dones = buffer.sample(batch_size)
-
-        states_t = torch.as_tensor(states, dtype=torch.float32, device=device)
-        actions_t = torch.as_tensor(
-            actions,
-            dtype=torch.long,
-            device=device,
-        ).unsqueeze(1)
-        rewards_t = torch.as_tensor(
-            rewards,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(1)
-        next_states_t = torch.as_tensor(next_states, dtype=torch.float32, device=device)
-        dones_t = torch.as_tensor(
-            dones,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(1)
+        actions = actions.unsqueeze(1)
+        rewards = rewards.unsqueeze(1)
+        dones = dones.unsqueeze(1)
 
         self.policy_net.train()
 
-        current_q_values = self.policy_net(states_t).gather(1, actions_t)
-
+        curr_q = self.policy_net(states).gather(1, actions)
         with torch.no_grad():
-            max_next_q_values = self.target_net(next_states_t).max(
-                dim=1,
-                keepdim=True,
-            )[0]
-            target_q_values = rewards_t + self.gamma * (1 - dones_t) * max_next_q_values
+            next_q = self.target_net(next_states).max(dim=1, keepdim=True)[0]
+            target_q = rewards + self.gamma * (1 - dones) * next_q
 
-        loss = self.loss_fn(current_q_values, target_q_values)
+        loss = self.loss_fn(curr_q, target_q)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -113,5 +111,3 @@ class DQNAgent:
                 target_param.copy_(
                     self.tau * policy_param + (1.0 - self.tau) * target_param
                 )
-
-        return loss.item(), None

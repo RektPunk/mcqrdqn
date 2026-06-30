@@ -1,9 +1,12 @@
 import random
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from numpy.typing import NDArray
 
+from common.buffer import ReplayBuffer
 from common.env import device
 from common.loss import quantile_huber_loss
 
@@ -14,6 +17,7 @@ class L1PMLinear(nn.Module):
         input_dim: int,
         num_actions: int,
         num_quantiles: int,
+        **kwargs,
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -32,7 +36,7 @@ class L1PMLinear(nn.Module):
         # Placeholder to store the L1 penalty during the forward pass
         self.register_buffer("_penalty", torch.tensor(0.0))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, tau: torch.Tensor | None) -> torch.Tensor:
         # Input shapes: (batch_size, input_dim)
         # return shape: (batch_size, num_actions, num_quantiles)
 
@@ -61,43 +65,59 @@ class L1PMLinear(nn.Module):
         # Exponential mapping of scale: scale shape
         scale = torch.exp(self.log_scale).unsqueeze(0)  # (1, num_actions, 1)
 
+        # Vectorized batched matrix multiplication over all actions
+        # Inputs:
+        # - x: (batch_size, input_dim) -> labeled 'bi'
+        # - coef[:, 1:, :]: (num_actions, input_dim, num_quantiles) -> labeled 'aiq'
+        # Output:
+        # - term1: (batch_size, num_actions, num_quantiles) -> labeled 'baq'
+        term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
         if self.training:
             # Store the total L1 penalty across all actions internally
             self._penalty = torch.mean(
                 torch.abs(delta_bias - delta_bias_clipped), dim=2
             ).sum()
-
-            # Vectorized batched matrix multiplication over all actions
-            # Inputs:
-            # - x: (batch_size, input_dim) -> labeled 'bi'
-            # - coef[:, 1:, :]: (num_actions, input_dim, num_quantiles) -> labeled 'aiq'
-            # Output:
-            # - term1: (batch_size, num_actions, num_quantiles) -> labeled 'baq'
-            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
-            return (term1 + coef[:, 0, :].unsqueeze(0)) * scale
+            grid = (term1 + coef[:, 0, :].unsqueeze(0)) * scale
         else:
-            term1 = torch.einsum("bi,aiq->baq", x, coef[:, 1:, :])
-
             # Cumsum of the clipped variations to reconstruct the constrained intercepts
             term2 = torch.cumsum(
                 torch.cat([coef[:, 0:1, 0:1], delta_bias_clipped], dim=2),
                 dim=2,
             )  # (num_actions, 1, num_quantiles)
             term2 = term2.transpose(0, 1)  # (1, num_actions, num_quantiles)
-            return (term1 + term2) * scale
+            grid = (term1 + term2) * scale
+
+        if tau is None:
+            return grid
+
+        scaled_tau = tau * (self.num_quantiles - 1)
+        idx_low = torch.clamp(scaled_tau.long(), 0, self.num_quantiles - 2)
+        idx_high = idx_low + 1
+
+        weight_high = scaled_tau - idx_low.float()
+        weight_low = 1.0 - weight_high
+
+        idx_low_expanded = idx_low.unsqueeze(1).expand(-1, self.num_actions, -1)
+        idx_high_expanded = idx_high.unsqueeze(1).expand(-1, self.num_actions, -1)
+
+        q_low = grid.gather(2, idx_low_expanded)
+        q_high = grid.gather(2, idx_high_expanded)
+
+        return weight_low.unsqueeze(1) * q_low + weight_high.unsqueeze(1) * q_high
 
     @property
     def penalty(self) -> torch.Tensor:
         return self._penalty
 
 
-class MCQRDQNet(nn.Module):
+class MCQNet(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        hidden_dim: int,
         num_actions: int,
+        hidden_dim: int,
         num_quantiles: int,
+        **kwargs,
     ):
         super().__init__()
         self.num_actions = num_actions
@@ -111,50 +131,45 @@ class MCQRDQNet(nn.Module):
         )
         self.output_head = L1PMLinear(hidden_dim, num_actions, num_quantiles)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, tau: torch.Tensor | None = None) -> torch.Tensor:
         features = self.feature_extractor(x)
-        return self.output_head(features)
+        return self.output_head(features, tau)
 
     def get_penalty(self) -> torch.Tensor:
         return self.output_head.penalty
-
-    def action(self, state: torch.Tensor) -> int:
-        with torch.no_grad():
-            quantiles = self.forward(state)
-            q_values = quantiles.mean(dim=2)
-            action = q_values.argmax().item()
-
-        return int(action)
 
 
 class MCQRDQNAgent:
     def __init__(
         self,
         state_dim: int,
-        hidden_dim: int,
         num_actions: int,
+        hidden_dim: int,
         num_quantiles: int,
-        lr: float,
+        lr: float = 1e-4,
         gamma: float = 0.99,
         tau: float = 0.005,
         l1_penalty_weight: float = 1.0,
+        **kwargs,
     ):
         self.num_actions = num_actions
         self.num_quantiles = num_quantiles
         self.gamma = gamma
         self.tau = tau
         self.l1_penalty_weight = l1_penalty_weight
-        self.policy_net = MCQRDQNet(
+        self.policy_net = MCQNet(
             input_dim=state_dim,
             hidden_dim=hidden_dim,
             num_actions=num_actions,
             num_quantiles=num_quantiles,
+            **kwargs,
         ).to(device)
-        self.target_net = MCQRDQNet(
+        self.target_net = MCQNet(
             input_dim=state_dim,
             hidden_dim=hidden_dim,
             num_actions=num_actions,
             num_quantiles=num_quantiles,
+            **kwargs,
         ).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
@@ -166,7 +181,7 @@ class MCQRDQNAgent:
             device=device,
         ).view(1, -1)
 
-    def select_action(self, state, epsilon: float):
+    def select_action(self, state: NDArray[np.float32], epsilon: float) -> int:
         if random.random() < epsilon:
             return random.randrange(self.num_actions)
         state_t = torch.as_tensor(
@@ -175,62 +190,42 @@ class MCQRDQNAgent:
             device=device,
         ).unsqueeze(0)
         self.policy_net.eval()
-        return self.policy_net.action(state_t)
 
-    def update(self, buffer, batch_size: int) -> tuple[float, float] | None:
+        with torch.no_grad():
+            dist = self.policy_net(state_t)
+            q_values = dist.mean(dim=2)
+            action = q_values.argmax().item()
+
+        return int(action)
+
+    def update(self, buffer: ReplayBuffer, batch_size: int):
         if len(buffer) < batch_size:
             return
 
         states, actions, rewards, next_states, dones = buffer.sample(batch_size)
-
-        states_t = torch.as_tensor(states, dtype=torch.float32, device=device)
-        actions_t = (
-            torch.as_tensor(actions, dtype=torch.long, device=device)
-            .unsqueeze(1)
-            .unsqueeze(2)
-            .expand(-1, -1, self.num_quantiles)
-        )
-        rewards_t = torch.as_tensor(
-            rewards, dtype=torch.float32, device=device
-        ).unsqueeze(1)
-        next_states_t = torch.as_tensor(next_states, dtype=torch.float32, device=device)
-        dones_t = torch.as_tensor(
-            dones,
-            dtype=torch.float32,
-            device=device,
-        ).unsqueeze(1)
+        actions = actions.view(-1, 1, 1).expand(-1, -1, self.num_quantiles)
+        rewards = rewards.unsqueeze(1)
+        dones = dones.unsqueeze(1)
 
         self.policy_net.train()
-        all_quantiles = self.policy_net(states_t)
-        with torch.no_grad():
-            diff = all_quantiles[..., 1:] - all_quantiles[..., :-1]
-            crossing_rate = (diff < 0).float().mean().item()
 
-        current_quantiles = all_quantiles.gather(1, actions_t).squeeze(1)
-
+        curr_dist = self.policy_net(states).gather(1, actions).squeeze(1)
         with torch.no_grad():
-            next_quantiles_target = self.target_net(next_states_t)
-            next_q_values = next_quantiles_target.mean(dim=2)
+            next_target_dist = self.target_net(next_states)
+            next_target_q = next_target_dist.mean(dim=2)
             best_actions = (
-                next_q_values.argmax(dim=1)
-                .unsqueeze(1)
-                .unsqueeze(2)
+                next_target_q.argmax(dim=1)
+                .view(-1, 1, 1)
                 .expand(-1, -1, self.num_quantiles)
             )
-            best_next_quantiles = next_quantiles_target.gather(
-                1,
-                best_actions,
-            ).squeeze(1)
-            target_quantiles = (
-                rewards_t + self.gamma * (1 - dones_t) * best_next_quantiles
-            )
+            best_next_dist = next_target_dist.gather(1, best_actions).squeeze(1)
+            target_dist = rewards + self.gamma * (1 - dones) * best_next_dist
 
-        loss = quantile_huber_loss(current_quantiles, target_quantiles, self.quantiles)
-        mcqr_penalty = self.policy_net.get_penalty()
-        total_loss = loss + self.l1_penalty_weight * mcqr_penalty
+        loss = quantile_huber_loss(curr_dist, target_dist, self.quantiles)
+        loss += self.l1_penalty_weight * self.policy_net.get_penalty()
 
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss.backward()
         self.optimizer.step()
 
         with torch.no_grad():
@@ -242,5 +237,3 @@ class MCQRDQNAgent:
                 target_param.copy_(
                     self.tau * policy_param + (1.0 - self.tau) * target_param
                 )
-
-        return total_loss.item(), crossing_rate
