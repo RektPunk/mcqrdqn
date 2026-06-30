@@ -53,7 +53,7 @@ class IQNet(nn.Module):
             tau.unsqueeze(-1) * self.cosine_basis.view(1, 1, -1) * math.pi
         )
         tau_emb = self.cosine_net(cos_features)
-        combined = state_emb.unsqueeze(1) * tau_emb
+        combined = torch.relu(state_emb.unsqueeze(1) * tau_emb)
         out = self.merge_net(combined)
 
         return out.permute(0, 2, 1)
@@ -147,6 +147,7 @@ class IQNAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         with torch.no_grad():
