@@ -8,7 +8,7 @@ from common.buffer import ReplayBuffer
 from common.env import load_env
 from common.logger import logger
 from common.utils import get_epsilon, get_model_path, get_writer, load_config
-from models import set_agent
+from models import FQFAgent, MCFQFAgent, set_agent
 
 
 def train(args: argparse.Namespace):
@@ -70,7 +70,14 @@ def train(args: argparse.Namespace):
         current_avg_reward = np.mean(reward_window)
         if len(reward_window) >= 20 and current_avg_reward > best_avg_reward:
             best_avg_reward = current_avg_reward
-            torch.save(agent.policy_net.state_dict(), model_path)
+            if isinstance(agent, (FQFAgent, MCFQFAgent)):
+                checkpoint = {
+                    "policy_net": agent.policy_net.state_dict(),
+                    "fpnet": agent.fpnet.state_dict(),
+                }
+                torch.save(checkpoint, model_path)
+            else:
+                torch.save(agent.policy_net.state_dict(), model_path)
             logger.info(f"# {episode} | New best avg reward {best_avg_reward:.2f}!")
 
     writer.close()
@@ -89,7 +96,7 @@ if __name__ == "__main__":
         "--model-id",
         type=str,
         default="mcqrdqn",
-        help="dqn, qrdqn, mcqrdqn",
+        help="dqn, qrdqn, mcqrdqn, iqn, fqf, mcfqf",
     )
     parser.add_argument("--seed", type=int, default=42)
 

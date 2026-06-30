@@ -6,7 +6,7 @@ import torch
 from common.env import load_env
 from common.logger import logger
 from common.utils import get_model_path, load_config
-from models import set_agent
+from models import FQFAgent, MCFQFAgent, set_agent
 
 
 def play(args: argparse.Namespace):
@@ -30,8 +30,15 @@ def play(args: argparse.Namespace):
 
     try:
         checkpoint = torch.load(model_path)
-        agent.policy_net.load_state_dict(checkpoint)
-        agent.policy_net.eval()
+
+        if isinstance(agent, (FQFAgent, MCFQFAgent)):
+            agent.policy_net.load_state_dict(checkpoint["policy_net"])
+            agent.fpnet.load_state_dict(checkpoint["fpnet"])
+            agent.policy_net.eval()
+            agent.fpnet.eval()
+        else:
+            agent.policy_net.load_state_dict(checkpoint)
+            agent.policy_net.eval()
         logger.info("Model loaded successfully!")
     except FileNotFoundError:
         logger.error(f"No model found at {model_path}. Please train the model first.")

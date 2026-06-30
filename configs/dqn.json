@@ -24,7 +24,7 @@
     "buffer_capacity": 500000
   },
   "LunarLander-v3": {
-    "num_episodes": 10000,
+    "num_episodes": 5000,
     "hidden_dim": 256,
     "lr": 0.0001,
     "batch_size": 128,
