@@ -96,7 +96,7 @@ if __name__ == "__main__":
         "--model-id",
         type=str,
         default="mcqrdqn",
-        help="dqn, qrdqn, mcqrdqn, fqf, mcfqf",
+        help="dqn, qrdqn, mcqrdqn, iqn, fqf, mcfqf",
     )
     parser.add_argument("--seed", type=int, default=42)
 

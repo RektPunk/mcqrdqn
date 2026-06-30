@@ -14,7 +14,6 @@ def quantile_huber_loss(
         0.5 * pairwise_diff.square(),
         kappa * (abs_diff - 0.5 * kappa),
     )
-
     quantile_weight = torch.abs(
         quantiles.unsqueeze(2) - (pairwise_diff.detach() < 0).float()
     )
