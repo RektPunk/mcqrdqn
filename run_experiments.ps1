@@ -1,5 +1,5 @@
-$ENVS = @("Acrobot-v1", "CartPole-v1", "MountainCar-v0", "LunarLander-v3")
-$MODELS = @("qrdqn", "iqn", "fqf", "mcqrdqn", "mcfqf")
+$ENVS = @("Acrobot-v1", "CartPole-v1", "LunarLander-v3", "MountainCar-v0")
+$MODELS = @("dqn", "fqf", "iqn", "mcfqf", "mcqrdqn", "qrdqn")
 $SEED = 42
 
 foreach ($env in $ENVS) {

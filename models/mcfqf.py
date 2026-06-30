@@ -67,7 +67,7 @@ class MCFQFAgent:
         self.target_fpnet.eval()
 
         self.optimizer_val = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.optimizer_fpn = optim.Adam(self.fpnet.parameters(), lr=lr_fpn)
+        self.optimizer_fpnet = optim.Adam(self.fpnet.parameters(), lr=lr_fpn)
 
     def select_action(self, state: NDArray[np.float32], epsilon: float) -> int:
         if random.random() < epsilon:
@@ -128,17 +128,19 @@ class MCFQFAgent:
 
         self.optimizer_val.zero_grad()
         val_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         with torch.no_grad():
             boundary_dist = self.policy_net(states, taus[:, 1:-1])
             actions_dist = actions[:, :, :-1]
             q_at_taus = boundary_dist.gather(1, actions_dist).squeeze(1)
             fpn_grads = 2 * q_at_taus - curr_dist[:, :-1] - curr_dist[:, 1:]
-        fpn_loss = (fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
+        fpn_loss = -(fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
         self.optimizer_val.step()
 
-        self.optimizer_fpn.zero_grad()
+        self.optimizer_fpnet.zero_grad()
         fpn_loss.backward()
-        self.optimizer_fpn.step()
+        torch.nn.utils.clip_grad_norm_(self.fpnet.parameters(), max_norm=10.0)
+        self.optimizer_fpnet.step()
 
         with torch.no_grad():
             for target_param, policy_param in zip(

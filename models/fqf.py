@@ -158,6 +158,7 @@ class FQFAgent:
 
         self.optimizer_val.zero_grad()
         val_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         with torch.no_grad():
             boundary_dist = self.policy_net(states, taus[:, 1:-1])
             actions_dist = actions[:, :, :-1]
@@ -165,10 +166,11 @@ class FQFAgent:
             fpn_grads = (
                 2 * q_at_taus - curr_dist.detach()[:, :-1] - curr_dist.detach()[:, 1:]
             )
-        fpn_loss = (fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
+        fpn_loss = -(fpn_grads * taus[:, 1:-1]).sum(dim=1).mean()
 
         self.optimizer_fpnet.zero_grad()
         fpn_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.fpnet.parameters(), max_norm=10.0)
 
         self.optimizer_val.step()
         self.optimizer_fpnet.step()
